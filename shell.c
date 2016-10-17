@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "utils.h"
 
@@ -43,7 +44,7 @@ void fork_exec(cmd_struct* command) {
 	case -1:
 		fprintf(stderr, "Error executing %s\n", command->progname);
 	case 0:
-		execvp_redirect_io(command);
+		execvp_redirect_io(command, -1, -1);
 	default:
 		if (wait(NULL) == -1) {
 			fprintf(stderr, "error: wait\n");
@@ -52,96 +53,85 @@ void fork_exec(cmd_struct* command) {
 	}
 }
 
+void close_fail(int fd, char* reason) {
+	if (close(fd) == -1) {
+		perror(reason);
+		exit(1);
+	}
+}
+
 void exec_pipeline(pipeline_struct *pipeline) {
 	int i = 0;
-	int pfd[2];
+	int **pfd = (int**) malloc(sizeof(int*) * (pipeline->n_cmds - 1));
 
-	// prev_wd keeps track of the previous fork()'s write descriptor, which needs to be closed
-	int prev_wfd = -1;
-	pid_t* child_pids = calloc(sizeof(pid_t) * pipeline->n_cmds, 1);
-	cmd_struct* cur_cmd = pipeline->cmds[0];
-	cmd_struct* next_cmd;
+	for (i = 0; i < pipeline->n_cmds - 1; i++)
+		pfd[i] = (int*) calloc(sizeof(2*sizeof(int)), 1);
 
-	/** create pipes */
+	int stdin_next = -1;
+	pid_t *children = calloc(sizeof(pid_t) * pipeline->n_cmds, 1);
+
 	for (i = 0; i < pipeline->n_cmds; i++) {
-		/** the first command has it's stdout redirected to the head of the
-		 *  pipe and the stdin closed
-		 */
-		cur_cmd = pipeline->cmds[i];
+		int stdin_redirect, stdout_redirect = -1;
+		cmd_struct* command = pipeline->cmds[i];
 
-		if (i < pipeline->n_cmds - 1)
-			next_cmd = pipeline->cmds[i+1];
-		else
-			next_cmd = NULL;
-
-		if (next_cmd) {
-			if (pipe(pfd) == -1) {
+		/** For n processes, we need n-1 pipelines */
+		if (i < pipeline->n_cmds - 1) {
+			if (pipe(pfd[i]) == -1) {
 				perror("pipe");
 				exit(1);
 			}
-			cur_cmd->redirect[1] = pfd[1];
-			next_cmd->redirect[0] = pfd[0];
-			printf("pfd[1]=%d -> ()==========() pfd[0]=%d -> \n", pfd[1], pfd[0]);
 		}
 
-		pid_t child_pid;
-		child_pid = fork();
+		/**
+		 * There are three cases to consider while building an execution
+		 * pipeline: The first process, middle processes, and the last process.
+		 * 1) The first process doesn't need to have it's stdin fd redirected,
+		 *    but will need to have it's stdout redirected to the write end of
+		 *    the first pipe. Since stdin_next is initialized to -1, this is
+		 *    handled implicitly.
+		 * 2) The middle processes need both their stdin fd and stdout fd
+		 *    redirected. This is handled implcitly.
+		 * 3) The last process doesn't need it's stdout redirected. This is
+		 *    handled explicitly with the if statement below.
+		 */
+		stdin_redirect = stdin_next;
 
-		switch (child_pid) {
-		case -1:
-			perror("fork");
-			exit(1);
-		case 0:
-			if (next_cmd) {
-				if (close(pfd[0]) == -1) {
-					perror("close pipe");
-					exit(1);
-				}
-				fprintf(stderr, "closed read fd %d in %s\n", pfd[0], cur_cmd->progname);
-			}
-
-			if (prev_wfd != -1) {
-				if (close(prev_wfd) == -1) {
-					perror("close previous write file descriptor");
-					exit(1);
-				}
-				fprintf(stderr, "closed write fd %d in %s\n", prev_wfd, cur_cmd->progname);
-			}
-			execvp_redirect_io(cur_cmd);
-		default:
-			prev_wfd = pfd[1];
-			child_pids[i] = child_pid;
-		}
-	}
-
-	for (i = 0; i < pipeline->n_cmds; i++) {
-		cur_cmd = pipeline->cmds[i];
-
-		if (cur_cmd->redirect[0] != -1) {
-			if (close(cur_cmd->redirect[0]) == -1) {
-				perror("close parent");
-				exit(1);
-			} else {
-				fprintf(stderr, "parent closed %d\n", cur_cmd->redirect[0]);
-			}
+		if (i != pipeline->n_cmds - 1) {
+			stdin_next = pfd[i][0];
+			stdout_redirect = pfd[i][1];
 		}
 
-		if (cur_cmd->redirect[1] != -1) {
-			if (close(cur_cmd->redirect[1]) == -1) {
-				perror("close parent");
-				exit(1);
-			} else {
-				fprintf(stderr, "parent closed %d\n", cur_cmd->redirect[1]);
-			}
-		}
+		pid_t child = fork();
 
-		if (i < pipeline->n_cmds -1) {
-			if (wait(NULL) == -1) {
-				fprintf(stderr, "error: wait\n");
-				return;
-			}
+		switch (child) {
+			case -1:
+				break;
+			case 0:
+				/**
+				 * bash uses a bitmap of file descriptors to close for each
+				 * process (see execute_cmd.c fd_bitmap and close_fd_bitmap).
+				 * we just calculate and manually close after the fork()
+				 */
+				close_fd_set(pfd, i, pipeline->n_cmds, false);
+				execvp_redirect_io(command, stdin_redirect, stdout_redirect);
+				break;
+			default:
+				children[i] = child;
+				break;
 		}
 	}
+
+	close_fd_set(pfd, pipeline->n_cmds-1, pipeline->n_cmds, true);
+
+	for (i = 0; i < pipeline->n_cmds; i++)
+		waitpid(children[i], NULL, 0);
+
+	free(children);
+
+	for (i = 0; i < pipeline->n_cmds - 1; i++)
+		free(pfd[i]);
+
+	free(pfd);
 }
 
 int main() {

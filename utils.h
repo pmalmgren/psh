@@ -58,11 +58,16 @@ pipeline_struct* parse_pipeline(char *str);
 bool handle_command(cmd_struct* command);
 
 /**
+ * Closes a set of file descriptors representing pipes based on the index of the command in the pipeline.
+ */
+void close_fd_set(int **fd_set, int cmd_index, int n_cmds, bool close_all);
+
+/**
  * Executes a command and it's arguments, optionally redirecting stdin to
  * stdin_redirect, and stdout to stdout_redirect. If either of the redirect
  * arguments is -1, nothing will be redirected.
  */
-void execvp_redirect_io(cmd_struct* command, int stdio_fd, int stdout_fd);
+void execvp_redirect_io(cmd_struct* command, int stdin_fd, int stdout_fd);
 
 // for debugging
 void print_command(cmd_struct* command);

@@ -21,9 +21,9 @@ char* next_non_empty(char **line) {
 
 void print_command(cmd_struct* command) {
     char** arg = command->args;
-  	 int i = 0;
+  	int i = 0;
 
-  	 fprintf(stderr, "progname: %s\n", command->progname);
+  	fprintf(stderr, "progname: %s\n", command->progname);
 
     for (i = 0, arg = command->args; *arg; ++arg, ++i) {
   	    fprintf(stderr, " args[%d]: %s\n", i, *arg);
@@ -43,9 +43,8 @@ cmd_struct* parse_command(char* str) {
     */
     cmd_struct* ret = calloc(sizeof(cmd_struct) + MAX_LEN * sizeof(char*), 1);
 
-    while ((token = next_non_empty(&copy))) {
+    while ((token = next_non_empty(&copy)))
         ret->args[i++] = token;
-    }
 
     ret->progname = ret->args[0];
     ret->redirect[0] = ret->redirect[1] = -1;
@@ -60,20 +59,47 @@ pipeline_struct* parse_pipeline(char* str) {
     pipeline_struct* ret;
 
     /* count pipe characters */
-    for (char* cur = copy; *cur; cur++) {
+    for (char* cur = copy; *cur; cur++)
         if (*cur == '|') ++n_cmds;
-    }
 
     ++n_cmds; /* There is one more command than there are pipe characters. */
 
     ret = calloc(sizeof(pipeline_struct) + n_cmds * sizeof(cmd_struct*), 1);
     ret->n_cmds = n_cmds;
 
-    while ((cmd_str = strsep(&copy, "|"))) {
+    while ((cmd_str = strsep(&copy, "|")))
         ret->cmds[i++] = parse_command(cmd_str);
-    }
 
     return ret;
+}
+
+void close_or_die(int fd) {
+    if (close(fd) == -1) {
+        perror("close");
+        exit(1);
+    }
+}
+
+void close_fd_set(int **fd_set, int cmd_index, int n_cmds, bool close_all) {
+    int pipe_index = 0;
+    int stop = (cmd_index == n_cmds - 1) ? cmd_index - 1 : cmd_index;
+
+    for (pipe_index = 0; pipe_index <= stop; pipe_index++) {
+        if (close_all) {
+            close_or_die(fd_set[pipe_index][0]);
+            close_or_die(fd_set[pipe_index][1]);
+            continue;
+        }
+
+        if ((cmd_index - pipe_index) >= 2) {
+            close_or_die(fd_set[pipe_index][0]);
+            close_or_die(fd_set[pipe_index][1]);
+        } else if (cmd_index == pipe_index) {
+            close_or_die(fd_set[pipe_index][0]);
+        } else if (cmd_index > pipe_index) {
+            close_or_die(fd_set[pipe_index][1]);
+        }
+    }
 }
 
 void execvp_redirect_io(cmd_struct* command, int stdin_fd, int stdout_fd) {
@@ -85,14 +111,10 @@ void execvp_redirect_io(cmd_struct* command, int stdin_fd, int stdout_fd) {
             exit(1);
         }
 
-        fprintf(stderr, "Command %s redirecting STDIN to %d\n", command->progname, command->redirect[0]);
-
         if (close(stdin_fd) == -1) {
             perror("close");
             exit(1);
         }
-    } else {
-        fprintf(stderr, "Command %s not redirecting STDIN. stdin_fd == %d\n", command->progname, stdin_fd);
     }
 
     if (stdout_fd != -1 && stdout_fd != STDOUT_FILENO) {
@@ -101,14 +123,10 @@ void execvp_redirect_io(cmd_struct* command, int stdin_fd, int stdout_fd) {
             exit(1);
         }
 
-        fprintf(stderr, "Command %s redirecting STDOUT to %d\n", command->progname, stdout_fd);
-
         if (close(stdout_fd) == -1) {
             perror("close");
             exit(1);
         }
-    } else {
-        fprintf(stderr, "Command %s not redirecting STDOUT. stdout_fd == %d\n", command->progname, stdout_fd);
     }
 
     execvp(command->progname, command->args);
