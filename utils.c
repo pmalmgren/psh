@@ -105,9 +105,7 @@ void close_fd_set(int **fd_set, int cmd_index, int n_cmds, bool close_all) {
 void execvp_redirect_io(cmd_struct* command, int stdin_fd, int stdout_fd) {
     if (stdin_fd != -1 && stdin_fd != STDIN_FILENO) {
         if (dup2(stdin_fd, STDIN_FILENO) == -1) {
-            char* error = calloc(sizeof(char*) * 1024, 1);
-            sprintf(error, "%s stdin dup2 fd %d", command->progname, stdin_fd);
-            perror(error);
+            perror("stdin dup");
             exit(1);
         }
 
@@ -119,7 +117,7 @@ void execvp_redirect_io(cmd_struct* command, int stdin_fd, int stdout_fd) {
 
     if (stdout_fd != -1 && stdout_fd != STDOUT_FILENO) {
         if (dup2(stdout_fd, STDOUT_FILENO) == -1) {
-            perror("stdout dup2");
+            perror("stdout dup");
             exit(1);
         }
 
